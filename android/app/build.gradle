@@ -7,7 +7,8 @@ plugins {
 
 android {
     namespace = "com.example.railway_navigation_app"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = flutter.compileSdkVersion  // Flutter version should resolve correctly
+
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -20,25 +21,21 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.railway_navigation_app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        minSdk = flutter.minSdkVersion  // Ensure the minSdk is set as per Flutter's requirements
+        targetSdk = flutter.targetSdkVersion  // Same with targetSdk
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            signingConfig = signingConfigs.debug  // Ensure your signingConfig is set up for release
         }
     }
 }
 
 flutter {
-    source = "../.."
+    source = "../.."  // Ensure that this path correctly points to your Flutter project source
 }
+
