@@ -1,23 +1,22 @@
 import 'package:flutter/material.dart';
-import 'screens/map_screen.dart'; // Import the MapScreen file
+import 'screens/map_screen.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false, // Removes the debug banner
+      debugShowCheckedModeBanner: false,
       title: 'Railway Navigation App',
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: const MapScreen(), // Set MapScreen as the default screen
+      home: MapScreen(),
     );
   }
 }
+
 

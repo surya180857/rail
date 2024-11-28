@@ -1,282 +1,221 @@
-import 'dart:convert';
-import 'dart:math'; // For sin, cos, atan2, and sqrt
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:http/http.dart' as http;
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:location/location.dart';
-
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'dart:math'; // For math functions like cos, sqrt, and asin
+import '../services/valhalla_service.dart';
 
 class MapScreen extends StatefulWidget {
-  const MapScreen({super.key});
+  const MapScreen({Key? key}) : super(key: key);
 
   @override
-  State<MapScreen> createState() => _MapScreenState();
+  _MapScreenState createState() => _MapScreenState();
 }
 
 class _MapScreenState extends State<MapScreen> {
   late GoogleMapController _mapController;
-  List<LatLng> _routePoints = [];
-  List<String> _maneuvers = [];
-  final Set<Polyline> _polylines = {};
-  final Location _location = Location();
-
-  final List<Map<String, dynamic>> _locations = [
-    {'name': 'Platform 10', 'lat': 17.432957, 'lon': 78.503130},
-    {'name': 'Ticket Counter', 'lat': 17.432936, 'lon': 78.503473},
-    {'name': 'Exit Gate', 'lat': 17.432520, 'lon': 78.502775},
-  ];
-
-  String? _selectedLocation;
+  late Location _location;
   late stt.SpeechToText _speech;
   late FlutterTts _flutterTts;
-  bool _isListening = false;
-  bool _isNavigationStarted = false;
 
-  static const CameraPosition _initialPosition = CameraPosition(
-    target: LatLng(17.432909, 78.503287),
-    zoom: 15,
-  );
+  LatLng _currentPosition = LatLng(17.432759, 17.432759);
+  LatLng? _selectedDestination;
+  String? _selectedLocation;
+  String? _currentManeuver;
+  final Set<Polyline> _polylines = {}; // Making this final
 
-  Future<void> _requestLocationPermission() async {
-    var status = await Permission.location.status;
-    if (status.isDenied) {
-      await Permission.location.request();
-    }
-  }
-
-  Future<void> _getRoute(LatLng destination) async {
-    const String valhallaUrl = "https://valhalla1.openstreetmap.de/route";
-
-    try {
-      final response = await http.post(
-        Uri.parse(valhallaUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          "locations": [
-            {"lat": 17.432909, "lon": 78.503287, "type": "break"},
-            {"lat": destination.latitude, "lon": destination.longitude, "type": "break"}
-          ],
-          "costing": "pedestrian",
-          "directions_options": {"units": "kilometers"}
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final shape = data['trip']['legs'][0]['shape'];
-        final maneuvers = data['trip']['legs'][0]['maneuvers'];
-
-        setState(() {
-          _routePoints = shape.map<LatLng>((point) {
-            return LatLng(point['lat'], point['lon']);
-          }).toList();
-
-          _maneuvers = maneuvers.map<String>((m) => m['instruction']).toList();
-        });
-
-        _drawRoute();
-      } else {
-        _flutterTts.speak("Failed to fetch route. Please try again.");
-      }
-    } catch (e) {
-      _flutterTts.speak("An error occurred while fetching the route.");
-    }
-  }
-
-  void _drawRoute() {
-    setState(() {
-      _polylines.clear();
-      _polylines.add(Polyline(
-        polylineId: const PolylineId("route"),
-        points: _routePoints,
-        color: Colors.blue,
-        width: 5,
-      ));
-    });
-  }
-
-  void _startNavigation() {
-    if (_routePoints.isEmpty) {
-      _flutterTts.speak("Route is not available. Please select a destination.");
-      return;
-    }
-
-    setState(() {
-      _isNavigationStarted = true;
-    });
-
-    _flutterTts.speak("Starting navigation. Follow the route.");
-
-    _location.onLocationChanged.listen((LocationData currentLocation) {
-      LatLng userLocation = LatLng(currentLocation.latitude!, currentLocation.longitude!);
-
-      // Update camera position to follow user
-      _mapController.animateCamera(CameraUpdate.newCameraPosition(
-        CameraPosition(
-          target: userLocation,
-          zoom: 18,
-          tilt: 60,
-        ),
-      ));
-
-      // Provide guidance if the user deviates from the route
-      double distance = _calculateDistanceFromRoute(userLocation);
-      if (distance > 10) {
-        _flutterTts.speak("You are off the route. Please return to the path.");
-      }
-    });
-  }
-
-  double _calculateDistanceFromRoute(LatLng position) {
-    // Simplified distance check from the first point on the route
-    if (_routePoints.isEmpty) return double.infinity;
-
-    double minDistance = double.infinity;
-    for (LatLng point in _routePoints) {
-      double distance = _calculateDistance(position, point);
-      if (distance < minDistance) {
-        minDistance = distance;
-      }
-    }
-    return minDistance;
-  }
-
-  double _calculateDistance(LatLng a, LatLng b) {
-    const double earthRadius = 6371000; // Radius of the Earth in meters
-    double dLat = (b.latitude - a.latitude) * (pi / 180.0);
-    double dLon = (b.longitude - a.longitude) * (pi / 180.0);
-    double lat1 = a.latitude * (pi / 180.0);
-    double lat2 = b.latitude * (pi / 180.0);
-
-    double aCalc = (sin(dLat / 2) * sin(dLat / 2)) +
-        (sin(dLon / 2) * sin(dLon / 2) * cos(lat1) * cos(lat2));
-    double c = 2 * atan2(sqrt(aCalc), sqrt(1 - aCalc));
-    return earthRadius * c;
-  }
-
-
-  void _initializeSpeech() {
-    _speech = stt.SpeechToText();
-    _flutterTts = FlutterTts();
-  }
-
-  void _startVoiceRecognition() async {
-    bool available = await _speech.initialize();
-    if (available) {
-      setState(() {
-        _isListening = true;
-      });
-
-      _speech.listen(
-        onResult: (result) {
-          String input = result.recognizedWords.toLowerCase();
-          final matchedLocation = _locations.firstWhere(
-                (loc) => loc['name'].toLowerCase().contains(input),
-            orElse: () => {'name': null, 'lat': null, 'lon': null},
-          );
-
-          if (matchedLocation['name'] != null) {
-            setState(() {
-              _selectedLocation = matchedLocation['name'];
-              _getRoute(LatLng(matchedLocation['lat'], matchedLocation['lon']));
-            });
-          } else {
-            _flutterTts.speak("Location not found. Please try again.");
-          }
-          _speech.stop();
-          setState(() {
-            _isListening = false;
-          });
-        },
-        listenFor: const Duration(seconds: 10),
-      );
-    } else {
-      _flutterTts.speak("Speech recognition is not available.");
-    }
-  }
-
+  final List<Map<String, dynamic>> _locations = [
+    {'name': 'Platform 1', 'lat': 17.433647, 'lon': 78.501739},
+    {'name': 'Ticket Counter', 'lat': 17.432932, 'lon': 78.503472},
+    {'name': 'Platform 8', 'lat': 17.433098, 'lon': 78.502896},
+  ];
 
   @override
   void initState() {
     super.initState();
-    _requestLocationPermission();
-    _initializeSpeech();
+    _location = Location();
+    _speech = stt.SpeechToText();
+    _flutterTts = FlutterTts();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Google Maps with Valhalla")),
-      body: Column(
+      appBar: AppBar(
+        title: const Text("Railway Navigation App"),
+      ),
+      body: Stack(
         children: [
-          // Destination dropdown
-          DropdownButton<String>(
-            value: _selectedLocation,
-            hint: const Text("Select a Destination"),
-            onChanged: (String? newValue) {
-              setState(() {
-                _selectedLocation = newValue;
-                if (_selectedLocation != null) {
-                  final destination = _locations.firstWhere((loc) => loc['name'] == _selectedLocation);
-                  _getRoute(LatLng(destination['lat'], destination['lon']));
-                }
-              });
+          GoogleMap(
+            initialCameraPosition: CameraPosition(target: _currentPosition, zoom: 16),
+            onMapCreated: (GoogleMapController controller) {
+              _mapController = controller;
             },
-            items: _locations.map<DropdownMenuItem<String>>((location) {
-              return DropdownMenuItem<String>(
-                value: location['name'],
-                child: Text(location['name']),
-              );
-            }).toList(),
+            myLocationEnabled: true,
+            myLocationButtonEnabled: true,
+            compassEnabled: true,
+            polylines: _polylines,
           ),
+          Positioned(
+            top: 20,
+            left: 20,
+            right: 20,
+            child: Column(
+              children: [
+                DropdownButton<String>(
+                  value: _selectedLocation,
+                  hint: const Text("Select a Destination"),
+                  onChanged: (String? newValue) {
+                    setState(() {
+                      _selectedLocation = newValue;
+                      if (_selectedLocation != null) {
+                        final destination = _locations.firstWhere(
+                              (loc) => loc['name'] == _selectedLocation,
+                          orElse: () => {'lat': 0.0, 'lon': 0.0, 'name': ''},
+                        );
 
-          // Map view
-          Expanded(
-            child: GoogleMap(
-              initialCameraPosition: _initialPosition,
-              onMapCreated: (GoogleMapController controller) {
-                _mapController = controller;
-              },
-              myLocationEnabled: true,
-              myLocationButtonEnabled: true,
-              compassEnabled: true,
-              polylines: _polylines,
+                        if (destination['lat'] != 0.0 && destination['lon'] != 0.0) {
+                          _selectedDestination = LatLng(destination['lat'], destination['lon']);
+                        }
+                      }
+                    });
+                  },
+                  items: _locations.map<DropdownMenuItem<String>>((location) {
+                    return DropdownMenuItem<String>(
+                      value: location['name'],
+                      child: Text(location['name']),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 10),
+                ElevatedButton(
+                  onPressed: _selectedDestination == null ? null : _startNavigation,
+                  child: const Text("Start Navigation"),
+                ),
+              ],
             ),
           ),
-
-          // Buttons
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ElevatedButton(
-                onPressed: _startVoiceRecognition,
-                child: const Text("Start Voice Command"),
-              ),
-              const SizedBox(width: 10),
-              if (_isListening) const CircularProgressIndicator(),
-              const SizedBox(width: 10),
-              ElevatedButton(
-                onPressed: _startNavigation,
-                child: const Text("Start Navigation"),
-              ),
-            ],
-          ),
-
-          // Maneuvers
-          if (_maneuvers.isNotEmpty)
-            Expanded(
-              child: ListView.builder(
-                itemCount: _maneuvers.length,
-                itemBuilder: (context, index) {
-                  return ListTile(title: Text(_maneuvers[index]));
-                },
+          Positioned(
+            bottom: 20,
+            left: 20,
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              color: Colors.white,
+              child: Text(
+                _currentManeuver ?? "No maneuver data",
+                style: const TextStyle(fontSize: 16),
               ),
             ),
+          ),
         ],
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _listenForDestination,
+        child: const Icon(Icons.mic),
+      ),
     );
+  }
+
+  void _listenForDestination() async {
+    if (!_speech.isListening) {
+      bool available = await _speech.initialize();
+      if (available) {
+        _speech.listen(
+          onResult: (result) {
+            String voiceInput = result.recognizedWords;
+            setState(() {
+              _selectedLocation = _locations
+                  .firstWhere(
+                    (loc) => loc['name'].toLowerCase() == voiceInput.toLowerCase(),
+                orElse: () => {'name': ''},
+              )
+                  .toString();
+              if (_selectedLocation != null) {
+                _flutterTts.speak("You selected $_selectedLocation.");
+                final destination = _locations.firstWhere((loc) => loc['name'] == _selectedLocation);
+                _selectedDestination = LatLng(destination['lat'], destination['lon']);
+              } else {
+                _flutterTts.speak("Destination not recognized. Please try again.");
+              }
+            });
+          },
+          listenFor: Duration(seconds: 5), // Timeout after 5 seconds
+          onSoundLevelChange: (level) {
+            // Optional: Handle sound level changes if necessary
+          },
+          pauseFor: Duration(seconds: 1), // Optional: Time to pause before starting to listen again
+        );
+      }
+    }
+  }
+
+
+  void _startNavigation() async {
+    if (_selectedDestination != null) {
+      // Ensure that route data is fetched
+      await _getRoute(_selectedDestination!);
+      // Start following the route and polylines
+      _followRouteWithManeuvers();
+    } else {
+      _flutterTts.speak("Please select a destination.");
+    }
+  }
+
+  Future<void> _getRoute(LatLng destination) async {
+    // Ensure you get the correct route from Valhalla service
+    final route = await ValhallaService.getRoute(_currentPosition, destination);
+
+    if (route.isNotEmpty) {
+      setState(() {
+        _polylines.clear(); // Clear previous polylines before adding new ones
+        _polylines.add(Polyline(
+          polylineId: PolylineId("route"),
+          points: route,  // Assuming the route is a list of LatLng points
+          color: Colors.blue,
+          width: 5,
+        ));
+      });
+    } else {
+      _flutterTts.speak("Route not found.");
+    }
+  }
+
+  void _followRouteWithManeuvers() {
+    _location.onLocationChanged.listen((currentLocation) {
+      LatLng userPosition = LatLng(currentLocation.latitude!, currentLocation.longitude!);
+
+      // Fetch the next maneuver and check the distance to the next route point
+      _getCurrentManeuver(userPosition);
+
+      // Update current position on map
+      setState(() {
+        _currentPosition = userPosition;
+      });
+
+      // Update the camera position to follow the user
+      _mapController.animateCamera(CameraUpdate.newLatLng(_currentPosition));
+    });
+  }
+
+
+  void _getCurrentManeuver(LatLng userPosition) {
+    if (_polylines.isNotEmpty) {
+      double distanceToNext = calculateDistance(userPosition, _polylines.first.points[0]);
+      if (distanceToNext < 10) {
+        setState(() {
+          _currentManeuver = "Turn left in 10 meters"; // Placeholder
+        });
+        _flutterTts.speak(_currentManeuver!);
+      }
+    }
+  }
+
+  double calculateDistance(LatLng start, LatLng end) {
+    const p = 0.017453292519943295;
+    final a = 0.5 -
+        cos((end.latitude - start.latitude) * p) / 2 +
+        cos(start.latitude * p) * cos(end.latitude * p) * (1 - cos((end.longitude - start.longitude) * p)) / 2;
+    return 12742 * asin(sqrt(a));
   }
 }
