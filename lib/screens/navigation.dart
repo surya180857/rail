@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_osm_plugin/flutter_osm_plugin.dart';
-import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:http/http.dart' as http;
 
 class NavigationScreen extends StatefulWidget {
@@ -32,16 +31,17 @@ class _NavigationScreenState extends State<NavigationScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initializeMapController();
-    });
+    _initializeMapController();
   }
 
   void _initializeMapController() async {
+    // Initialize the MapController to track the user
     _osmMapController = MapController(
       initMapWithUserPosition: UserTrackingOption(enableTracking: true),
     );
-    await Future.delayed(Duration(seconds: 1)); // Wait for initialization
+
+    // Start updating the location marker and zooming to location
+    await Future.delayed(Duration(seconds: 1)); // Wait for the map to initialize
     _zoomToUserLocation();
     _startLiveMarkerUpdate();
   }
@@ -55,6 +55,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
           longitude: userLocation.longitude,
         ),
       );
+
+      // Apply zoom level to center on the user's location
       await _osmMapController?.setZoom(zoomLevel: 18.0);
     }
   }
@@ -83,9 +85,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
         );
       });
 
-      await _osmMapController?.addMarker(_currentLocationMarker!);
+      await _osmMapController?.addMarker(
+        _currentLocationMarker!,
+      );
     }
   }
+
 
   Future<void> _startNavigation() async {
     if (_selectedDestination == null) {
@@ -136,7 +141,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   Future<Map<String, dynamic>> _fetchValhallaRoute(
       double startLat, double startLng, double endLat, double endLng) async {
-    final valhallaUrl = 'http://172.20.10.2:8002/route';
+    final valhallaUrl = 'http://192.168.29.124:8002/route';
 
     final body = {
       "locations": [
@@ -165,23 +170,48 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   Future<void> _drawRoutePolyline(String encodedPolyline) async {
-    final polylinePoints = PolylinePoints();
-    final List<PointLatLng> decodedPolyline = polylinePoints.decodePolyline(encodedPolyline);
+    final decodedPolyline = _decodePolyline(encodedPolyline);
 
-    final List<GeoPoint> geoPoints = decodedPolyline.map((point) {
-      return GeoPoint(latitude: point.latitude, longitude: point.longitude);
-    }).toList();
-
-    if (geoPoints.isNotEmpty) {
+    for (int i = 0; i < decodedPolyline.length - 1; i++) {
       await _osmMapController?.drawRoad(
-        geoPoints.first,
-        geoPoints.last,
+        decodedPolyline[i],
+        decodedPolyline[i + 1],
         roadType: RoadType.foot,
-        intersectPoint: geoPoints.sublist(1, geoPoints.length - 1),
       );
     }
   }
 
+  List<GeoPoint> _decodePolyline(String encoded) {
+    final points = <GeoPoint>[];
+    int index = 0, len = encoded.length;
+    int lat = 0, lng = 0;
+
+    while (index < len) {
+      int shift = 0, result = 0;
+      int b;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1F) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1F) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+
+      points.add(GeoPoint(
+        latitude: lat / 1E5,
+        longitude: lng / 1E5,
+      ));
+    }
+    return points;
+  }
 
   Widget _getManeuverWidget(String instruction, String maneuverType) {
     IconData icon;
