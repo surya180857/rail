@@ -1,22 +1,13 @@
 import 'package:flutter/material.dart';
 import 'screens/map_screen.dart';
+import 'screens/navigation.dart';
 
 void main() {
-  runApp(MyApp());
+  runApp(MaterialApp(
+    initialRoute: '/map',
+    routes: {
+      '/map': (context) => MapScreen(),
+      '/navigation': (context) => NavigationScreen(), // Ensure this is correct
+    },
+  ));
 }
-
-class MyApp extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Railway Navigation App',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-      ),
-      home: MapScreen(),
-    );
-  }
-}
-
-
