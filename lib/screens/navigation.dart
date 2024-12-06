@@ -1,243 +1,141 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_osm_plugin/flutter_osm_plugin.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
+import 'package:polyline_codec/polyline_codec.dart'; // For polyline decoding
+import 'package:location/location.dart'; // For user location
 
 class NavigationScreen extends StatefulWidget {
+  const NavigationScreen({super.key});
+
   @override
   _NavigationScreenState createState() => _NavigationScreenState();
 }
 
 class _NavigationScreenState extends State<NavigationScreen> {
-  MapController? _osmMapController;
+  final MapController _mapController = MapController();
+
+  // Polyline points
+  List<LatLng> _polylinePoints = [];
+
+  // Valhalla API URL
+  final String _valhallaUrl = 'http://192.168.29.124:8002/route';
 
   // Predefined destinations
-  final Map<String, GeoPoint> _destinations = {
-    'Platform 1': GeoPoint(latitude: 17.433339, longitude: 78.501021),
-    'Platform 2': GeoPoint(latitude: 17.433410, longitude: 78.501992),
-    'Exit Gate': GeoPoint(latitude: 17.432642, longitude: 78.502781),
-    'Ticket Counter': GeoPoint(latitude: 17.432929, longitude: 78.503478),
+  final Map<String, LatLng> _destinations = {
+    'Platform 1': LatLng(17.433339, 78.501021),
+    'Platform 2': LatLng(17.433410, 78.501992),
+    'Exit Gate': LatLng(17.432642, 78.502781),
   };
 
   String? _selectedDestination;
-  bool _isNavigating = false;
-
+  LocationData? _currentLocation;
   List<Map<String, String>> _maneuvers = [];
-  int _currentManeuverIndex = 0;
+  bool _isNavigating = false;
   bool _navigationComplete = false;
-
-  GeoPoint? _currentLocationMarker;
 
   @override
   void initState() {
     super.initState();
-    _initializeMapController();
+    _getCurrentLocation(); // Get the user's current location on initialization
   }
 
-  void _initializeMapController() async {
-    // Initialize the MapController to track the user
-    _osmMapController = MapController(
-      initMapWithUserPosition: UserTrackingOption(enableTracking: true),
-    );
-
-    // Start updating the location marker and zooming to location
-    await Future.delayed(Duration(seconds: 1)); // Wait for the map to initialize
-    _zoomToUserLocation();
-    _startLiveMarkerUpdate();
-  }
-
-  Future<void> _zoomToUserLocation() async {
-    final userLocation = await _osmMapController?.myLocation();
-    if (userLocation != null) {
-      await _osmMapController?.changeLocation(
-        GeoPoint(
-          latitude: userLocation.latitude,
-          longitude: userLocation.longitude,
-        ),
-      );
-
-      // Apply zoom level to center on the user's location
-      await _osmMapController?.setZoom(zoomLevel: 18.0);
-    }
-  }
-
-  void _startLiveMarkerUpdate() {
-    Future.doWhile(() async {
-      if (_osmMapController != null) {
-        await _updateUserLocationMarker();
-      }
-      await Future.delayed(Duration(seconds: 2));
-      return mounted;
-    });
-  }
-
-  Future<void> _updateUserLocationMarker() async {
-    final currentLocation = await _osmMapController?.myLocation();
-    if (currentLocation != null) {
-      if (_currentLocationMarker != null) {
-        await _osmMapController?.removeMarker(_currentLocationMarker!);
-      }
-
+  // Function to get the user's current location
+  Future<void> _getCurrentLocation() async {
+    final Location location = Location();
+    try {
+      final LocationData currentLocation = await location.getLocation();
       setState(() {
-        _currentLocationMarker = GeoPoint(
-          latitude: currentLocation.latitude,
-          longitude: currentLocation.longitude,
-        );
+        _currentLocation = currentLocation;
       });
-
-      await _osmMapController?.addMarker(
-        _currentLocationMarker!,
-      );
+    } catch (e) {
+      print("Error getting location: $e");
     }
   }
 
+  // Function to fetch route data from Valhalla
+  Future<void> _fetchRouteFromValhalla() async {
+    if (_currentLocation == null || _selectedDestination == null) return;
 
-  Future<void> _startNavigation() async {
-    if (_selectedDestination == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Please select a destination.")),
+    final requestBody = jsonEncode({
+      "locations": [
+        {"lat": _currentLocation!.latitude, "lon": _currentLocation!.longitude},
+        {"lat": _destinations[_selectedDestination]!.latitude, "lon": _destinations[_selectedDestination]!.longitude},
+      ],
+      "costing": "pedestrian",
+      "directions_options": {"units": "km"}
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse(_valhallaUrl),
+        headers: {"Content-Type": "application/json"},
+        body: requestBody,
       );
-      return;
-    }
 
-    final endPoint = _destinations[_selectedDestination!]!;
-    final userLocation = await _osmMapController?.myLocation();
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final encodedPolyline = data['trip']['legs'][0]['shape'];
+        print("Encoded Polyline: $encodedPolyline");
 
-    if (userLocation != null) {
-      try {
-        final response = await _fetchValhallaRoute(
-          userLocation.latitude,
-          userLocation.longitude,
-          endPoint.latitude,
-          endPoint.longitude,
-        );
-
-        final maneuvers = response['maneuvers'] as List;
-        final polyline = response['geometry'] as String;
+        final decodedPoints = _decodePolyline(encodedPolyline);
+        print("Decoded Polyline Points: $decodedPoints");
 
         setState(() {
-          _maneuvers = maneuvers.map((m) {
+          _polylinePoints = decodedPoints; // Update polyline points on the map
+          _maneuvers = (data['trip']['legs'][0]['maneuvers'] as List).map((m) {
             return {
               'instruction': m['instruction'].toString(),
               'type': m['type'].toString(),
             };
           }).toList();
           _isNavigating = true;
-          _currentManeuverIndex = 0;
         });
-
-        await _drawRoutePolyline(polyline);
-      } catch (error) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error starting navigation: $error")),
-        );
+      } else {
+        print("Failed to fetch route: ${response.statusCode}");
       }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Unable to get your current location.")),
-      );
+    } catch (e) {
+      print("Error fetching route: $e");
     }
   }
 
-  Future<Map<String, dynamic>> _fetchValhallaRoute(
-      double startLat, double startLng, double endLat, double endLng) async {
-    final valhallaUrl = 'http://192.168.29.124:8002/route';
-
-    final body = {
-      "locations": [
-        {"lat": startLat, "lon": startLng},
-        {"lat": endLat, "lon": endLng}
-      ],
-      "costing": "pedestrian",
-      "directions_options": {"units": "meters"}
-    };
-
-    final response = await http.post(
-      Uri.parse(valhallaUrl),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(body),
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return {
-        'maneuvers': data['trip']['legs'][0]['maneuvers'],
-        'geometry': data['trip']['legs'][0]['shape'],
-      };
-    } else {
-      throw Exception("Failed to fetch route: ${response.body}");
-    }
-  }
-
-  Future<void> _drawRoutePolyline(String encodedPolyline) async {
-    final decodedPolyline = _decodePolyline(encodedPolyline);
-
-    for (int i = 0; i < decodedPolyline.length - 1; i++) {
-      await _osmMapController?.drawRoad(
-        decodedPolyline[i],
-        decodedPolyline[i + 1],
-        roadType: RoadType.foot,
-      );
-    }
-  }
-
-  List<GeoPoint> _decodePolyline(String encoded) {
-    final points = <GeoPoint>[];
-    int index = 0, len = encoded.length;
-    int lat = 0, lng = 0;
-
-    while (index < len) {
-      int shift = 0, result = 0;
-      int b;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1F) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1F) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-
-      points.add(GeoPoint(
-        latitude: lat / 1E5,
-        longitude: lng / 1E5,
-      ));
+  // Function to decode polyline with scaling factor of 10
+  List<LatLng> _decodePolyline(String encoded) {
+    List<LatLng> points = [];
+    try {
+      final decoded = PolylineCodec.decode(encoded);
+      points = decoded.map((point) {
+        // Each point is a List<num>, so we need to extract the latitude and longitude
+        double lat = point[0].toDouble() / 10;  // Divide by 10 for your scaling
+        double lng = point[1].toDouble() / 10;  // Divide by 10 for your scaling
+        return LatLng(lat, lng);
+      }).toList();
+    } catch (e) {
+      print("Error decoding polyline: $e");
     }
     return points;
   }
 
-  Widget _getManeuverWidget(String instruction, String maneuverType) {
-    IconData icon;
-    switch (maneuverType) {
-      case 'turn_left':
-        icon = Icons.turn_left;
-        break;
-      case 'turn_right':
-        icon = Icons.turn_right;
-        break;
-      case 'continue':
-        icon = Icons.straight;
-        break;
-      case 'arrive':
-        icon = Icons.flag;
-        break;
-      default:
-        icon = Icons.directions;
+  // Function to start navigation
+  void _startNavigation() {
+    if (_selectedDestination == null || _currentLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Please select a destination and enable location services')));
+      return;
     }
-    return Row(
-      children: [
-        Icon(icon, color: Colors.blue),
-        SizedBox(width: 8),
-        Expanded(child: Text(instruction)),
-      ],
-    );
+    _fetchRouteFromValhalla(); // Fetch the route and start navigation
+  }
+
+  // Function to move to the next maneuver
+  void _nextManeuver() {
+    if (_maneuvers.isNotEmpty) {
+      final currentInstruction = _maneuvers.removeAt(0); // Remove and get the first maneuver
+      setState(() {
+        _isNavigating = _maneuvers.isNotEmpty;
+        _navigationComplete = _maneuvers.isEmpty;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Next Step: ${currentInstruction['instruction']}')));
+    }
   }
 
   @override
@@ -246,53 +144,57 @@ class _NavigationScreenState extends State<NavigationScreen> {
       appBar: AppBar(title: Text('Navigation')),
       body: Column(
         children: [
-          if (!_isNavigating)
-            DropdownButton<String>(
-              hint: Text('Select Destination'),
-              value: _selectedDestination,
-              items: _destinations.keys.map((destination) {
-                return DropdownMenuItem(
-                  value: destination,
-                  child: Text(destination),
-                );
-              }).toList(),
-              onChanged: (value) {
-                setState(() {
-                  _selectedDestination = value;
-                });
-              },
-            ),
-          if (!_isNavigating)
-            ElevatedButton(
-              onPressed: _startNavigation,
-              child: Text('Start Navigation'),
-            ),
+          DropdownButton<String>(
+            hint: Text('Select Destination'),
+            value: _selectedDestination,
+            items: _destinations.keys.map((destination) {
+              return DropdownMenuItem(
+                value: destination,
+                child: Text(destination),
+              );
+            }).toList(),
+            onChanged: (value) {
+              setState(() {
+                _selectedDestination = value;
+              });
+            },
+          ),
+          ElevatedButton(
+            onPressed: _startNavigation,
+            child: Text('Start Navigation'),
+          ),
+          ElevatedButton(
+            onPressed: _nextManeuver,
+            child: Text('Next Maneuver'),
+          ),
           Expanded(
-            child: _osmMapController == null
-                ? Center(child: CircularProgressIndicator())
-                : OSMFlutter(
-              controller: _osmMapController!,
-              osmOption: OSMOption(
-                zoomOption: ZoomOption(maxZoomLevel: 18, minZoomLevel: 3),
-                showDefaultInfoWindow: true,
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                center: _polylinePoints.isNotEmpty ? _polylinePoints.first : LatLng(17.432916, 78.503333),
+                zoom: 15.0,
               ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.app',
+                ),
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _polylinePoints,
+                      strokeWidth: 4.0,
+                      color: Colors.blue,
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-          if (_isNavigating && _currentManeuverIndex < _maneuvers.length)
-            _getManeuverWidget(
-              _maneuvers[_currentManeuverIndex]['instruction']!,
-              _maneuvers[_currentManeuverIndex]['type']!,
-            ),
-          if (_navigationComplete)
-            Text('You have reached your destination!'),
+          if (_isNavigating) Text('Navigating...'),
+          if (_navigationComplete) Text('You have reached your destination!'),
         ],
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _osmMapController?.dispose();
-    super.dispose();
   }
 }
